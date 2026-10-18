@@ -92,6 +92,14 @@ start, end: inclusive dates "YYYY-MM-DD" for the period asked about (e.g. March 
   2026-03-01..2026-03-31; Q2 2026 -> 2026-04-01..2026-06-30), or null if no period.
 group_by: one of {GROUPS} or null - set when asking WHICH product/region/customer/month.
 rank: "top" or "bottom" (with group_by); n: how many to return (default 1).
+IMPORTANT: questions starting "How many"/"How much"/"What was the total" are never group_by questions,
+even if they contain words like "at least" or "most". Use group_by only for "which/what X had the most...".
+Examples:
+"How many different customers placed at least one paid order for a Toaster?" ->
+ {{"metric":"customer_count","status":"paid","product":"Toaster","group_by":null}}
+"Which region brought in the least revenue in Q1 2026?" ->
+ {{"metric":"revenue","group_by":"region","rank":"bottom","n":1,"start":"2026-01-01","end":"2026-03-31"}}
+"How many Kettles were sold in April 2026?" -> {{"metric":"units","product":"Kettle","start":"2026-04-01","end":"2026-04-30"}}
 Return only the JSON object."""
 
 
@@ -148,32 +156,39 @@ def rule_spec(question, regions, products):
             a, b = found[0], found[-1]
             spec["start"] = f"{year}-{a:02d}-01"
             spec["end"] = f"{year}-{b:02d}-{calendar.monthrange(year, b)[1]}"
-    if re.search(r"\bwhich\b|\bwhat (product|region|customer|month)\b|\btop\b|\bbest\b|\bmost\b|\bhighest\b|\blowest\b|\bleast\b|\bworst\b", q):
+    qs = re.sub(r"\bat (least|most)\b", " ", q)
+    is_amount_question = bool(re.match(r"\s*(how many|how much|what (is|was|were) the (total|number|count|sum|amount|average)|total|count|number of)", qs))
+    if not is_amount_question and re.search(r"\bwhich\b|\bwhat (product|region|customer|month)\b|\btop\b|\bbest\b|\bmost\b|\bhighest\b|\blargest\b|\bbiggest\b|\blowest\b|\bleast\b|\bworst\b|\bsmallest\b|\bfewest\b", qs):
         for g in ("product", "region", "customer", "month"):
-            if g in q:
+            if g in qs:
                 spec["group_by"] = g
                 break
         if spec["group_by"]:
-            spec["rank"] = "bottom" if re.search(r"lowest|least|fewest|worst|smallest|bottom", q) else "top"
-    if "refund rate" in q or ("rate" in q and "refund" in q):
+            spec["rank"] = "bottom" if re.search(r"lowest|least|fewest|worst|smallest|bottom", qs) else "top"
+    status = None
+    for st, pat in (("paid", r"\bpaid\b"), ("refunded", r"\brefunded\b"), ("void", r"\bvoid(ed)?\b|\bcancel")):
+        if re.search(pat, qs):
+            status = st
+            break
+    if "refund rate" in qs or ("rate" in qs and "refund" in qs):
         spec["metric"] = "refund_rate"
-    elif "refund" in q and re.search(r"how many|number of|count", q):
-        spec["metric"] = "refund_count"
-    elif "net" in q and ("revenue" in q or "sales" in q):
-        spec["metric"] = "net_revenue"
-    elif "refund" in q:
-        spec["metric"] = "refunds"
-    elif re.search(r"average order|avg order|aov|average.*(value|size)", q):
-        spec["metric"] = "avg_order_value"
-    elif re.search(r"unique customers|distinct customers|how many customers|number of customers", q):
+    elif re.search(r"\bcustomers\b|\bbuyers\b|\bclients\b", qs) and re.search(r"how many|number of|count", qs):
         spec["metric"] = "customer_count"
-    elif re.search(r"units|quantity|items sold|how many .* sold", q):
+        spec["status"] = status or ("paid" if re.search(r"\b(bought|buy|purchased|spent|paid)\b", qs) else None)
+    elif "refund" in qs and re.search(r"how many|number of|count", qs) and not re.search(r"how much|amount|value|usd|\$", qs):
+        spec["metric"] = "refund_count"
+    elif "net" in qs.split() and re.search(r"revenue|sales", qs):
+        spec["metric"] = "net_revenue"
+    elif "refund" in qs:
+        spec["metric"] = "refunds"
+    elif re.search(r"average order|avg order|\baov\b|average .*(value|size|amount)", qs):
+        spec["metric"] = "avg_order_value"
+    elif re.search(r"\bunits\b|quantity|\bitems\b|how many .* (sold|bought|purchased)", qs) and not re.search(r"how many (\w+ )?orders", qs):
         spec["metric"] = "units"
-    elif re.search(r"how many orders|number of orders|order count|count of orders|how many .*orders", q):
+        spec["status"] = status
+    elif re.search(r"how many|number of|count of|order count", qs) and re.search(r"\border", qs):
         spec["metric"] = "order_count"
-        for s in ("paid", "void", "refunded"):
-            if s in q:
-                spec["status"] = s
+        spec["status"] = status
     else:
         spec["metric"] = "revenue"
     return spec
