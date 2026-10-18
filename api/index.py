@@ -1,3 +1,8 @@
+"""Acme Appliances ledger Q&A service.
+
+The question is turned into a small structured query (by an LLM if AIPIPE_TOKEN is set,
+otherwise by keyword rules); all arithmetic is done here in Python on the real data.
+"""
 import calendar
 import json
 import os
@@ -32,7 +37,9 @@ _lock = threading.Lock()
 
 def _get(path):
     url = BASE + "&path=" + urllib.request.quote(path, safe="")
-    with urllib.request.urlopen(url, timeout=10) as r:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (ledger-agent)", "Accept": "application/json, */*"})
+    with urllib.request.urlopen(req, timeout=10) as r:
         return r.read().decode("utf-8")
 
 
@@ -258,11 +265,17 @@ def answer(question):
 async def ask(request: Request, path: str = ""):
     body = await request.json()
     question = str(body.get("question", ""))
-    value, spec = answer(question)
+    try:
+        value, spec = answer(question)
+    except Exception as e:
+        return {"answer": None, "error": f"{type(e).__name__}: {e}"}
     return {"answer": value}
 
 
 @app.get("/{path:path}")
 def health(path: str = ""):
-    orders, rates = load()
-    return {"status": "ok", "orders": len(orders), "llm": bool(AIPIPE_TOKEN)}
+    try:
+        orders, rates = load()
+        return {"status": "ok", "orders": len(orders), "llm": bool(AIPIPE_TOKEN)}
+    except Exception as e:
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
