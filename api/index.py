@@ -99,6 +99,8 @@ Examples:
  {{"metric":"customer_count","status":"paid","product":"Toaster","group_by":null}}
 "Which region brought in the least revenue in Q1 2026?" ->
  {{"metric":"revenue","group_by":"region","rank":"bottom","n":1,"start":"2026-01-01","end":"2026-03-31"}}
+"On average, how many US dollars is a paid South order worth?" ->
+ {{"metric":"avg_order_value","region":"South","group_by":null}}
 "How many Kettles were sold in April 2026?" -> {{"metric":"units","product":"Kettle","start":"2026-04-01","end":"2026-04-30"}}
 Return only the JSON object."""
 
@@ -170,12 +172,22 @@ def rule_spec(question, regions, products):
         if re.search(pat, qs):
             status = st
             break
-    if "refund rate" in qs or ("rate" in qs and "refund" in qs):
+    money_words = bool(re.search(r"dollars?|\busd\b|\$|worth|\bvalue\b|revenue|sales|spent|spend|money|amount", qs))
+    if re.search(r"\baverage\b|\bon average\b|\bmean\b|\bavg\b|\btypical\b|\baov\b|\bper order\b", qs) and money_words:
+        spec["metric"] = "avg_order_value"
+        spec["status"] = None
+    elif "refund rate" in qs or ("rate" in qs and "refund" in qs):
         spec["metric"] = "refund_rate"
+    elif re.search(r"how many (us |u\.s\. )?dollars|how much", qs) and "refund" in qs:
+        spec["metric"] = "refunds"
+    elif re.search(r"how many (us |u\.s\. )?dollars|how much", qs) and "net" in qs.split():
+        spec["metric"] = "net_revenue"
+    elif re.search(r"how many (us |u\.s\. )?dollars", qs):
+        spec["metric"] = "revenue"
     elif re.search(r"\bcustomers\b|\bbuyers\b|\bclients\b", qs) and re.search(r"how many|number of|count", qs):
         spec["metric"] = "customer_count"
         spec["status"] = status or ("paid" if re.search(r"\b(bought|buy|purchased|spent|paid)\b", qs) else None)
-    elif "refund" in qs and re.search(r"how many|number of|count", qs) and not re.search(r"how much|amount|value|usd|\$", qs):
+    elif "refund" in qs and re.search(r"how many|number of|count", qs) and not money_words:
         spec["metric"] = "refund_count"
     elif "net" in qs.split() and re.search(r"revenue|sales", qs):
         spec["metric"] = "net_revenue"
